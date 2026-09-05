@@ -129,6 +129,7 @@ public class SphericalOceanRenderer : MonoBehaviour
     public static SphericalOceanRenderer Instance { get; private set; }
 
     private Material _material;
+    private bool _createdMaterial;
     private MaterialPropertyBlock _propBlock;
     private MeshFilter _mf;
     private MeshRenderer _mr;
@@ -193,6 +194,16 @@ public class SphericalOceanRenderer : MonoBehaviour
     private void OnDestroy()
     {
         if (Instance == this) Instance = null;
+
+        // Clean up created material to prevent leaks
+        if (_createdMaterial && _material != null)
+        {
+            if (Application.isPlaying)
+                Destroy(_material);
+            else
+                DestroyImmediate(_material);
+            _material = null;
+        }
     }
 
     private void Update()
@@ -441,6 +452,7 @@ public class SphericalOceanRenderer : MonoBehaviour
             {
                 _material = new Material(shader) { name = "SphericalOceanMat" };
                 _mr.sharedMaterial = _material;
+                _createdMaterial = true;
             }
         }
 
