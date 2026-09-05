@@ -224,6 +224,9 @@ public class SphericalOceanRenderer : MonoBehaviour
         _propBlock.SetFloat("_CrestTime", time);
         _mr.SetPropertyBlock(_propBlock);
 
+        // Also set globally for underwater shader
+        Shader.SetGlobalVector("_OceanCenterPosWorld", GetPlanetCenter());
+
         _lastTime = time;
     }
 
@@ -336,11 +339,33 @@ public class SphericalOceanRenderer : MonoBehaviour
 
     // --- Public API ---
 
-    public void MarkDirty() { }
+    public void MarkDirty()
+    {
+        if (_material != null)
+            SyncMaterialProperties();
+    }
 
     public float GetSurfaceHeight(Vector3 worldPos)
     {
-        return seaLevelRadius;
+        // Use Gerstner waves only for gameplay queries (buoyancy, underwater check).
+        // FFT is GPU-only — too heavy for CPU per-query evaluation.
+        float height = seaLevelRadius;
+        float time = Application.isPlaying ? Time.time : (float)GetEditorTime();
+        float2 windDir = new float2(Mathf.Cos(windDirection), Mathf.Sin(windDirection));
+        Vector3 center = GetPlanetCenter();
+        Vector3 dir = (worldPos - center).normalized;
+        float2 pos2D = dir.xz * worldScale;
+
+        for (int i = 0; i < 5; i++)
+        {
+            float freq = (i + 1) * waveScale * 0.1f;
+            float amp = maxWaveAmplitude * Mathf.Exp(-i * 0.5f) * waveScale;
+            float2 k = windDir * freq;
+            float phase = math.dot(k, pos2D) - time * waveSpeed * freq;
+            height += amp * Mathf.Sin(phase);
+        }
+
+        return height * waveChoppiness;
     }
 
     public bool IsUnderwater(Vector3 worldPos)

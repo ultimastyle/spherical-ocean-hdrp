@@ -35,6 +35,11 @@ public class SphericalUnderwaterEffect : MonoBehaviour
     [Range(0f, 1f)] public float lightAttenuation = 0.5f;
     public float lightDepthFalloff = 10f;
 
+    [Header("Wave Distortion")]
+    [Range(0f, 1f)] public float waveIntensity = 0.1f;
+    [Range(0f, 2f)] public float fogStartDistance = 1f;
+    [Range(1f, 200f)] public float fogEndDistance = 100f;
+
     [Header("Color Grading")]
     public Color underwaterTintColor = new Color(0.3f, 0.6f, 0.8f, 1f);
     [Range(0f, 2f)] public float saturationBoost = 1.2f;
@@ -113,12 +118,12 @@ public class SphericalUnderwaterEffect : MonoBehaviour
         _underwaterMaterial.SetColor("_AbsorptionColor", underwaterTintColor);
         _underwaterMaterial.SetColor("_ScatteringColor", new Color(0f, 0.4f, 0.35f, 1f));
         _underwaterMaterial.SetFloat("_FogDensity", fogDensity);
-        _underwaterMaterial.SetFloat("_FogStart", 1f);
-        _underwaterMaterial.SetFloat("_FogEnd", 100f);
+        _underwaterMaterial.SetFloat("_FogStart", fogStartDistance);
+        _underwaterMaterial.SetFloat("_FogEnd", fogEndDistance);
         _underwaterMaterial.SetFloat("_CausticsScale", causticsScale);
         _underwaterMaterial.SetFloat("_CausticsStrength", causticsStrength);
         _underwaterMaterial.SetFloat("_CausticsSpeed", causticsAnimationSpeed);
-        _underwaterMaterial.SetFloat("_WaveIntensity", 0.1f);
+        _underwaterMaterial.SetFloat("_WaveIntensity", waveIntensity);
         _underwaterMaterial.SetFloat("_DepthFade", lightDepthFalloff);
         _underwaterMaterial.SetFloat("_WaveCrestFog", fogAbsorption);
 

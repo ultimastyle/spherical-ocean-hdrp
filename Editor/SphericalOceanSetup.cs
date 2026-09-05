@@ -71,6 +71,7 @@ public class SphericalOceanSetup : EditorWindow
         {
             Material mat = new Material(shader) { name = "SphericalOceanMat" };
             AssetDatabase.CreateAsset(mat, path + "/SphericalOceanMat.mat");
+            renderer.GetComponent<MeshRenderer>().sharedMaterial = mat;
         }
 
         // Create cascade data if missing

@@ -68,6 +68,8 @@ Shader "SphericalOcean/Underwater"
             TEXTURE2D_X(_CameraDepthTexture);
             SAMPLER(sampler_CameraDepthTexture);
 
+            float3 _OceanCenterPosWorld;
+
             // Fullscreen triangle vertex shader (no vertex buffer needed)
             struct Attributes
             {
@@ -131,8 +133,12 @@ Shader "SphericalOcean/Underwater"
 
                 float3 fogColor = lerp(_WaterColor.rgb, _ScatteringColor.rgb, fogFactor);
 
-                // --- Caustics ---
-                float2 causticsUV = worldPos.xz * _CausticsScale;
+                // --- Caustics (spherical UV projection) ---
+                float3 causticsDir = normalize(worldPos - _OceanCenterPosWorld);
+                float2 causticsUV = float2(
+                    atan2(causticsDir.z, causticsDir.x) / (2.0 * 3.14159265) + 0.5,
+                    acos(causticsDir.y) / 3.14159265
+                ) * _CausticsScale;
                 float2 causticsOffset1 = float2(_Time.y * _CausticsSpeed * 0.1, _Time.y * _CausticsSpeed * 0.07);
                 float2 causticsOffset2 = float2(-_Time.y * _CausticsSpeed * 0.08, _Time.y * _CausticsSpeed * 0.12);
 

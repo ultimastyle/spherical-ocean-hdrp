@@ -182,7 +182,8 @@ public class SphericalBuoyancy : MonoBehaviour
             if (oceanRenderer == null) return 0f;
             Vector3 center = oceanRenderer.GetPlanetCenter();
             float dist = Vector3.Distance(transform.position, center);
-            return oceanRenderer.seaLevelRadius - dist;
+            float waveHeight = GetWaveHeight(transform.position);
+            return (oceanRenderer.seaLevelRadius + waveHeight) - dist;
         }
     }
 }
