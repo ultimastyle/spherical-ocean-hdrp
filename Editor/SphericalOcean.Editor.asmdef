@@ -1,0 +1,20 @@
+{
+    "name": "com.spherical-ocean.hdrp.editor",
+    "rootNamespace": "SphericalOcean.Editor",
+    "references": [
+        "com.spherical-ocean.hdrp",
+        "Unity.RenderPipelines.HighDefinition.Runtime",
+        "Unity.RenderPipelines.Core.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
