@@ -1,0 +1,72 @@
+﻿### CRITICAL ISSUES FOUND
+
+#### 1. MATHEMATICAL & PHYSICS CORRECTNESS: Incorrect Butterfly Twiddle Indexing
+- **FILE and FUNCTION:** `OceanWaveCompute.compute`, `ButterflyPass` kernel
+- **EXACT DESCRIPTION:** The twiddle factor lookup index is calculated as `stage * _Resolution + (idx % halfSize)`. However, in a standard Cooley-Tukey FFT butterfly pass, the twiddle factor depends on the element's position within its specific butterfly group, not its global index modulo `halfSize`. Because `idx % halfSize` repeats every `halfSize` elements globally across all rows/groups instead of resetting per butterfly group, elements in later groups in the same row pull incorrect twiddle factors, destroying the frequency spectrum transformation.
+- **EXACT FIX:** 
+  Replace the twiddle indexing line inside `ButterflyPass`:
+  ```hlsl
+  // Inside ButterflyPass:
+  int colGroup = col / fullSize;
+  int colInGroup = col % fullSize;
+  int twiddleIndex = stage * _Resolution + (colInGroup * (_Resolution / fullSize)); // Or correct stride based on stage
+  ```
+  *(Alternatively, store twiddles linearly per group stride: `stage * (_Resolution / 2) + (colInGroup % halfSize)` depending on your radix-2 indexing convention).*
+
+#### 2. MATHEMATICAL & PHYSICS CORRECTNESS: Incorrect Complex Conjugate Symmetry in Spectrum Update
+- **FILE and FUNCTION:** `OceanWaveCompute.compute`, `UpdateSpectrum` kernel
+- **EXACT DESCRIPTION:** To ensure the IFFT output is purely real, the frequency components must obey conjugate symmetry: $h(-k) = h^*(k)$. The code computes `h0_conj = float2(h0.x, -h0.y)` but applies it to the *backward* wave rotation using `e^(-i*omega*t)`. However, the spatial frequency lookup in `InitSpectrum` assigns independent random phases per grid cell without mapping `(-kx, -ky)` to the conjugate of `(kx, ky)`. Without mirroring the initial spectrum values $h_0(-k) = h_0^*(k)$ on the CPU during initialization, the compute shader's symmetry enforcement fails, resulting in complex artifacts (imaginary components bleeding into displacement/height fields).
+- **EXACT FIX:**
+  In `FFTWaveSimulation.cs`, `InitSpectrum()`, ensure conjugate symmetry is enforced when populating `spectrumData`:
+  ```csharp
+  // Populate symmetric elements properly or enforce h0(-k) = conj(h0(k))
+  int mirrorX = (resolution - ix) % resolution;
+  int mirrorY = (resolution - iy) % resolution;
+  // Make sure phases/amplitudes satisfy conjugate symmetry for real FFT output.
+  ```
+
+#### 3. BUGS: Uninitialized and Unbound Compute Buffers in FFT Pass
+- **FILE and FUNCTION:** `FFTWaveSimulation.cs`, `RunFFT()`
+- **EXACT DESCRIPTION:** `_pingPongA` and `_pingPongB` are bound to `_kernelButterfly`, but the shader properties `ID_PingPongA` (`_PingPongA`) and `ID_PingPongB` (`_PingPongB`) are declared as `RWStructuredBuffer<float2>` in the compute shader without being bound via `fftCompute.SetBuffer(_kernelButterfly, ...)` for *both* ping and pong inside the stage loop. The code binds `_kernelButterfly` with `ID_PingPongA` and `ID_PingPongB`, but doesn't bind them correctly per stage swap (it swaps the C# references `ping` and `pong`, but the kernel needs them mapped to the correct shader slots if the shader uses fixed buffer names). Looking at the code: `fftCompute.SetBuffer(_kernelButterfly, ID_PingPongA, ping);` and `fftCompute.SetBuffer(_kernelButterfly, ID_PingPongB, pong);` is done, but `ID_PingPongB` matches `_PingPongB` in the C# side while the compute shader declares `RWStructuredBuffer<float2> _PingPongB`. Wait, check the compute shader declarations: `RWStructuredBuffer<float2> _PingPongA;` and `RWStructuredBuffer<float2> _PingPongB;`. The shader binds them by name/ID, but doesn't alternate the bindings if the kernel reads from one and writes to another. The compute shader kernel `ButterflyPass` uses `_PingPongA` for reading and writes to `_PingPongB` (implicitly assumed, but in the code it writes to `_PingPongB[idx] = ...`). If `_PingPongA` is bound as `ping` and `_PingPongB` is bound as `pong`, but `ButterflyPass` hardcodes `_PingPongA[...]` for reading and `_PingPongB[...]` for writing, then swapping `ping` and `pong variables in C# does *not* swap which buffer the HLSL code reads from and writes to! HLSL accesses buffers by the variable name (`_PingPongA` / `_PingPongB`), not by the bound variable slot unless register binding or distinct kernels are used.
+- **EXACT FIX:**
+  Either use two separate compute kernels (`ButterflyEven` and `ButterflyOdd`) or pass the read/write buffers explicitly via dynamically set buffer names/indices, or rewrite `ButterflyPass` to take `RWStructuredBuffer<float2> Input` and `RWStructuredBuffer<float2> Output`:
+  ```hlsl
+  // In HLSL:
+  RWStructuredBuffer<float2> _InputBuffer;
+  RWStructuredBuffer<float2> _OutputBuffer;
+  ```
+  And in `FFTWaveSimulation.cs`:
+  ```csharp
+  fftCompute.SetBuffer(_kernelButterfly, "_InputBuffer", ping);
+  fftCompute.SetBuffer(_kernelButterfly, "_OutputBuffer", pong);
+  ```
+
+#### 4. UNITY / HDRP BEST PRACTICES: Main Thread Stall via Synchronous `JobHandle.Complete()` on Per-Frame Mesh Evaluation
+- **FILE and FUNCTION:** `SphericalGerstnerWaves.cs`, `Evaluate()`
+- **EXACT DESCRIPTION:** `JobHandle.Complete()` is called synchronously inside `Evaluate()`, which is called every frame inside `DeformMesh()` on the main thread. This stalls the CPU waiting for the job to finish, completely defeating the purpose of using Jobs for zero-GC/parallel execution and causing severe frame rate drops (CPU-GPU synchronization lock).
+- **EXACT FIX:**
+  Schedule the job in `Update()`, store the `JobHandle`, and complete/apply the results on the *next* frame (double buffering or asynchronous completion):
+  ```csharp
+  // Schedule in Update(), complete in LateUpdate() or use results with a frame delay.
+  ```
+
+#### 5. SHADER ISSUES / BUILTS-IN: Missing HDRP Transform Functions & Unbound Light Position
+- **FILE and FUNCTION:** `OceanSurface.shader`, `frag()` function
+- **EXACT DESCRIPTION:** The fragment shader uses `_MainLightPosition.xyz`, which is a Built-in/URP pipeline global variable (`UNITY_LIGHT_POSITION` or similar). In HDRP (`HDRenderPipeline`), light positions and main directional lights are handled via the Light Loop and HD Shadow / Light Data structures, and `_MainLightPosition` does **not** exist or will return zero, causing subsurface scattering and specular highlights from the sun to completely break in HDRP.
+- **EXACT FIX:**
+  In HDRP, query the main light direction using the HDRP Light Loop API:
+  ```hlsl
+  #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/LightLoop/LightLoop.hlsl"
+  // Use HDRP light data to get the main directional light direction:
+  // LightLoopContext lightingContext = InitLightLoopContext();
+  // DirectionalLightData lightData = _DirectionalLightDatas[0];
+  // float3 lightDir = lightData.forward;
+  ```
+
+---
+
+### MEDIUM / LOW ISSUES FOUND
+
+- **MEDIUM (`FFTWaveSimulation.cs`, `SampleDisplacement`):** Calling `AsyncGPUReadback.Request` every single time `SampleDisplacement` is called creates a massive flood of asynchronous readback requests per frame if queried frequently (e.g., for buoyancy objects), causing memory buildup and pipeline stalls. It should be requested once per frame or throttled.
+- **MEDIUM (`OceanSurface.shader`, ShadowPass):** The `ShadowCaster` pass samples `_OceanDisplacementTex`, but when cascades are active (`_OceanCascadeCount > 0`), the shadow pass ignores cascade displacements and falls back to `_OceanDisplacementTex` (which might be unallocated or stale if cascades are used), causing shadow-to-mesh misalignment.
+- **LOW (`OceanRenderer.cs`, `Start()`):** `_mainCamera = Camera.main;` is cached in `Start()`. If the main camera changes or is destroyed/recreated (e.g., scene transitions), `_mainCamera` becomes a null reference, breaking distance checks.
