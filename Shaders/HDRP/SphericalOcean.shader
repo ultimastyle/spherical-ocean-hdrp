@@ -665,11 +665,15 @@ Shader "SphericalOcean/HDRP"
                     // Chromatic aberration — clamp UVs to prevent OOB GPU reads
                     float2 rcoord = reflect(view, mappedNormal).xz;
                     float2 pixelCoord = refractedScreenUV * _ScreenSize.xy;
-                    pixelCoord = clamp(pixelCoord, float2(1, 1), _ScreenSize.xy - float2(1, 1));
+                    float2 offsetR = rcoord * -_AberrationAmount * _ScreenSize.xy;
+                    float2 offsetB = rcoord * _AberrationAmount * _ScreenSize.xy;
+                    float2 coordR = clamp(pixelCoord + offsetR, float2(1, 1), _ScreenSize.xy - float2(1, 1));
+                    float2 coordG = clamp(pixelCoord, float2(1, 1), _ScreenSize.xy - float2(1, 1));
+                    float2 coordB = clamp(pixelCoord + offsetB, float2(1, 1), _ScreenSize.xy - float2(1, 1));
                     half3 sceneColour;
-                    sceneColour.r = LOAD_TEXTURE2D_X(_CameraColorTexture, uint2(pixelCoord - rcoord * -_AberrationAmount * _ScreenSize.xy)).r;
-                    sceneColour.g = LOAD_TEXTURE2D_X(_CameraColorTexture, uint2(pixelCoord)).g;
-                    sceneColour.b = LOAD_TEXTURE2D_X(_CameraColorTexture, uint2(pixelCoord + rcoord * _AberrationAmount * _ScreenSize.xy)).b;
+                    sceneColour.r = LOAD_TEXTURE2D_X(_CameraColorTexture, uint2(coordR)).r;
+                    sceneColour.g = LOAD_TEXTURE2D_X(_CameraColorTexture, uint2(coordG)).g;
+                    sceneColour.b = LOAD_TEXTURE2D_X(_CameraColorTexture, uint2(coordB)).b;
 
                     // Depth fog
                     float depthFogDistance = max(refractedSceneZ - abs(i.pixelZ), 0.0);
