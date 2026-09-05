@@ -1,0 +1,260 @@
+// OceanWaveCompute.compute
+// GPU FFT ocean wave simulation — spectrum update, butterfly FFT, displacement, Jacobian, foam.
+// Dispatch groups: (resolution/8, resolution/8, 1) for all kernels.
+//
+// Ping-pong buffers: float2 (real, imag) for complex frequency-domain data.
+// Output textures: float4 displacement (x,height,z,0), float Jacobian, accumulated foam.
+
+#pragma kernel UpdateSpectrum
+#pragma kernel ButterflyPass
+#pragma kernel InverseTransform
+#pragma kernel ComputeJacobian
+#pragma kernel UpdateFoam
+
+// --- Parameters ---
+int _Resolution;
+float _Time;
+float _WindSpeed;
+float2 _WindDir;
+float _SpectrumScale;
+float _Choppiness;
+float _Gravity;
+float _PatchSize;
+float _FoamThreshold;
+float _FoamDecay;
+float _FoamGain;
+int _Stage;
+bool _Horizontal;
+float _DeltaTime;
+
+// --- Buffers ---
+StructuredBuffer<float4> _Spectrum;     // (kx, ky, energy, phase) per cell
+StructuredBuffer<float2> _Twiddle;      // twiddle factors per stage
+StructuredBuffer<int> _BitReverse;      // bit-reversal permutation table
+RWStructuredBuffer<float2> _PingPongA;
+RWStructuredBuffer<float2> _PingPongB;
+
+// --- Textures ---
+RWTexture2D<float4> _DispOut;   // displacement output
+RWTexture2D<float>  _JacOut;   // Jacobian output
+RWTexture2D<float>  _FoamTex;  // accumulated foam (read + write)
+
+// --- Sampler ---
+SamplerState sampler_linear_clamp;
+
+// Complex multiply: (a + bi)(c + di) = (ac - bd) + (ad + bc)i
+float2 ComplexMul(float2 a, float2 b)
+{
+    return float2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+// =========================================================================
+//  Kernel 0: UpdateSpectrum
+//  Time-evolve the spectrum with conjugate symmetry for real IFFT output.
+//
+//  Tessendorf equation:
+//    h(k,t) = h0(k) * e^(i*omega*t) + h0*(-k)* e^(-i*omega*t)
+//
+//  h0(-k) = conj(h0(k)) for a real-valued height field.
+//  This ensures the IFFT produces purely real displacement.
+// =========================================================================
+[numthreads(8, 8, 1)]
+void UpdateSpectrum(uint3 id : SV_DispatchThreadID)
+{
+    int idx = id.y * _Resolution + id.x;
+    if (idx >= _Resolution * _Resolution) return;
+
+    float4 spec = _Spectrum[idx];
+    float2 k = spec.xy;        // wavevector
+    float energy = spec.z;     // spectrum energy density
+    float phase = spec.w;      // random initial phase
+
+    float kLen = length(k);
+    if (kLen < 1e-7)
+    {
+        _PingPongA[idx] = float2(0, 0);
+        return;
+    }
+
+    // Deep-water dispersion: omega = sqrt(g * |k|)
+    float omega = sqrt(_Gravity * kLen);
+
+    // --- Forward wave: h0(k) * e^(i*omega*t) ---
+    float theta = omega * _Time + phase;
+    float cosT = cos(theta);
+    float sinT = sin(theta);
+
+    // Amplitude = sqrt(energy) with directional alignment
+    float2 kNorm = k / kLen;
+    float alignment = dot(kNorm, _WindDir);
+    float directional = alignment > 0 ? pow(alignment, 2.0) : 0;
+    float amp = sqrt(max(0, energy)) * (1.0 + _WindSpeed * 0.01 * directional);
+
+    // h0(k) = amp * e^(i*phase) => complex (amp*cos(phase), amp*sin(phase))
+    float2 h0 = float2(amp * cos(phase), amp * sin(phase));
+
+    // h0(k) * e^(i*omega*t) = h0 * (cos(omega*t) + i*sin(omega*t))
+    float2 forward = ComplexMul(h0, float2(cosT, sinT));
+
+    // --- Conjugate wave: h0*(-k) * e^(-i*omega*t) ---
+    // h0*(-k) = conj(h0(k)) = (amp*cos(phase), -amp*sin(phase))
+    float2 h0_conj = float2(h0.x, -h0.y);
+
+    // e^(-i*omega*t) = cos(omega*t) - i*sin(omega*t)
+    float2 backward = ComplexMul(h0_conj, float2(cosT, -sinT));
+
+    // Final: h(k,t) = forward + backward (ensures real output after IFFT)
+    _PingPongA[idx] = forward + backward;
+}
+
+// =========================================================================
+//  Kernel 1: ButterflyPass
+//  Cooley-Tukey radix-2 FFT butterfly. One stage per dispatch.
+//  Correct complex multiplication: W * bottom, then add/subtract.
+// =========================================================================
+[numthreads(8, 8, 1)]
+void ButterflyPass(uint3 id : SV_DispatchThreadID)
+{
+    int idx = id.y * _Resolution + id.x;
+    if (idx >= _Resolution * _Resolution) return;
+
+    int stage = _Stage;
+    int halfSize = 1 << stage;
+    int fullSize = halfSize << 1;
+
+    float2 twiddle = _Twiddle[stage * _Resolution + (idx % halfSize)];
+
+    if (_Horizontal)
+    {
+        int row = idx / _Resolution;
+        int col = idx % _Resolution;
+        int colGroup = col / fullSize;
+        int colInGroup = col % fullSize;
+
+        int base = row * _Resolution + colGroup * fullSize;
+
+        float2 top = _PingPongA[base + colInGroup];
+        float2 bottom = _PingPongA[base + (colInGroup < halfSize ? colInGroup + halfSize : colInGroup - halfSize)];
+
+        // Correct complex multiplication: twiddle * bottom
+        float2 w_bottom = ComplexMul(twiddle, bottom);
+
+        if (colInGroup < halfSize)
+            _PingPongB[idx] = top + w_bottom;
+        else
+            _PingPongB[idx] = top - w_bottom;
+    }
+    else
+    {
+        int row = idx / _Resolution;
+        int col = idx % _Resolution;
+        int rowGroup = row / fullSize;
+        int rowInGroup = row % fullSize;
+
+        int baseRow = rowGroup * fullSize;
+        int srcRow = baseRow + rowInGroup;
+        int partnerRow = baseRow + (rowInGroup < halfSize ? rowInGroup + halfSize : rowInGroup - halfSize);
+
+        float2 top = _PingPongA[srcRow * _Resolution + col];
+        float2 bottom = _PingPongA[partnerRow * _Resolution + col];
+
+        float2 w_bottom = ComplexMul(twiddle, bottom);
+
+        if (rowInGroup < halfSize)
+            _PingPongB[idx] = top + w_bottom;
+        else
+            _PingPongB[idx] = top - w_bottom;
+    }
+}
+
+// =========================================================================
+//  Kernel 2: InverseTransform
+//  Read the finished IFFT result, generate displacement height map.
+//  Displacement XZ = choppiness * real component, height Y = imag component.
+// =========================================================================
+[numthreads(8, 8, 1)]
+void InverseTransform(uint3 id : SV_DispatchThreadID)
+{
+    int2 coord = int2(id.x, id.y);
+    if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution) return;
+
+    int idx = id.y * _Resolution + id.x;
+
+    // Apply bit-reversal permutation before reading
+    int brIdx = _BitReverse[idx];
+    float2 val = _PingPongA[brIdx];
+
+    // Normalize by resolution (FFT convention)
+    float norm = 1.0 / (float)(_Resolution * _Resolution);
+    float real = val.x * norm;
+    float imag = val.y * norm;
+
+    // Height = imaginary part (should be ~0 with conjugate symmetry), displacement = choppiness * real part
+    float height = imag;
+    float2 disp = float2(real, real) * _Choppiness;
+
+    // Output: x=dispX, y=height, z=dispZ, w=unused
+    _DispOut[coord] = float4(disp.x, height, disp.y, 0);
+}
+
+// =========================================================================
+//  Kernel 3: ComputeJacobian
+//  Jacobian determinant of the displacement field — used for foam generation.
+//  J = (1 + dDx/dx)(1 + dDz/dz) - (dDx/dz)(dDz/dx)
+//  Where D is the horizontal displacement field.
+// =========================================================================
+[numthreads(8, 8, 1)]
+void ComputeJacobian(uint3 id : SV_DispatchThreadID)
+{
+    int2 coord = int2(id.x, id.y);
+    if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution) return;
+
+    int2 left  = (id.x > 0) ? int2(id.x - 1, id.y) : int2(_Resolution - 1, id.y);
+    int2 right = (id.x < (uint)(_Resolution - 1)) ? int2(id.x + 1, id.y) : int2(0, id.y);
+    int2 down  = (id.y > 0) ? int2(id.x, id.y - 1) : int2(id.x, _Resolution - 1);
+    int2 up    = (id.y < (uint)(_Resolution - 1)) ? int2(id.x, id.y + 1) : int2(id.x, 0);
+
+    float4 c = _DispOut[coord];
+    float4 l = _DispOut[left];
+    float4 r = _DispOut[right];
+    float4 d = _DispOut[down];
+    float4 u = _DispOut[up];
+
+    // Finite differences of displacement (x and z components)
+    float dDx_dx = (r.x - l.x) * 0.5;
+    float dDx_dz = (u.x - d.x) * 0.5;
+    float dDz_dx = (r.z - l.z) * 0.5;
+    float dDz_dz = (u.z - d.z) * 0.5;
+
+    // Jacobian determinant
+    float J = (1.0 + dDx_dx) * (1.0 + dDz_dz) - dDx_dz * dDz_dx;
+
+    _JacOut[coord] = J;
+}
+
+// =========================================================================
+//  Kernel 4: UpdateFoam
+//  Accumulate foam from Jacobian: foam increases when J < threshold,
+//  decays exponentially otherwise. Frame-rate independent via _DeltaTime.
+// =========================================================================
+[numthreads(8, 8, 1)]
+void UpdateFoam(uint3 id : SV_DispatchThreadID)
+{
+    int2 coord = int2(id.x, id.y);
+    if (id.x >= (uint)_Resolution || id.y >= (uint)_Resolution) return;
+
+    float J = _JacOut[coord];
+    float prevFoam = _FoamTex[coord];
+
+    // Foam accumulates where wave crests overlap (J < threshold)
+    float foamDelta = 0;
+    if (J < _FoamThreshold)
+    {
+        foamDelta = _FoamGain * (_FoamThreshold - J);
+    }
+
+    // Frame-rate independent exponential decay
+    float foam = (prevFoam + foamDelta) * exp(-_FoamDecay * _DeltaTime);
+
+    _FoamTex[coord] = saturate(foam);
+}
