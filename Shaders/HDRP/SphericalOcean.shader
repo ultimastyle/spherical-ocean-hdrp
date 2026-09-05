@@ -17,6 +17,7 @@ Shader "SphericalOcean/HDRP"
         _WaveChoppiness("Choppiness", Range(0.0, 1.0)) = 0.8
         _MaxWaveAmplitude("Max Amplitude", Float) = 50.0
         _WorldScale("World Scale", Float) = 1.0
+        _OctaveCount("Octave Count", Range(1, 8)) = 8
 
         [Header(Normals)]
         [NoScaleOffset] _Normals("Normal Map", 2D) = "bump" {}
@@ -62,6 +63,7 @@ Shader "SphericalOcean/HDRP"
         _FoamWhiteColor("Foam Tint", Color) = (1.0, 1.0, 1.0, 1.0)
         _ShorelineFoamMinDepth("Shoreline Foam Min Depth", Range(0.01, 5.0)) = 0.27
         _FoamIntensity("Foam Intensity", Range(0.0, 2.0)) = 1.0
+        _FoamScrollSpeed("Foam Scroll Speed", Range(0.0, 2.0)) = 0.3
 
         [Header(Transparency)]
         [Toggle] _Transparency("Enable Transparency", Float) = 1
@@ -161,6 +163,7 @@ Shader "SphericalOcean/HDRP"
                 float _WaveSpeed;
                 float _MaxWaveAmplitude;
                 float _WorldScale;
+                int _OctaveCount;
                 half _NormalsStrengthOverall;
                 half _NormalsStrength;
                 half _NormalsScale;
@@ -186,6 +189,7 @@ Shader "SphericalOcean/HDRP"
                 half _WaveFoamFeather;
                 half _ShorelineFoamMinDepth;
                 half _FoamIntensity;
+                half _FoamScrollSpeed;
                 half4 _DepthFogDensity;
                 half _RefractionStrength;
                 half _AberrationAmount;
@@ -196,12 +200,6 @@ Shader "SphericalOcean/HDRP"
                 half _CausticsDepthOfField;
                 half _ScatterAmount;
                 half3 _ScatterColor;
-                half _ScatterFade;
-                float _Visibility;
-                float3 _WaterExtinction;
-                float3 _SunTransmittance;
-                float3 _WaterColor;
-                float _HorizonFog;
                 float _UseExactFresnel;
                 float _SkyIntensity;
             CBUFFER_END
@@ -346,7 +344,7 @@ Shader "SphericalOcean/HDRP"
                 float ddx_sum = 0;
                 float ddy_sum = 0;
 
-                for (int i = 0; i < 8; i++)
+                for (int i = 0; i < _OctaveCount; i++)
                 {
                     float frequency = (i + 1) * _WaveScale * 0.08;
                     float2 k = windDir * frequency * 10.0;
@@ -544,25 +542,6 @@ Shader "SphericalOcean/HDRP"
                 #endif
 
                 return col;
-            }
-
-            // ============================================================
-            //  WATER VOLUME
-            // ============================================================
-
-            float3 WaterColor(float3 viewDir, float3 lightDir, float sunFade)
-            {
-                float waterSunGradient = dot(viewDir, -lightDir);
-                waterSunGradient = saturate(pow(waterSunGradient * 0.7 + 0.3, 2.0));
-
-                float3 waterSunColor = float3(0.0, 1.0, 0.85) * waterSunGradient * 0.25;
-
-                float waterGradient = saturate(dot(viewDir, float3(0.0, -1.0, 0.0)) * 0.5 + 0.5);
-
-                float3 watercolor = (_WaterColor.rgb + waterSunColor) * waterGradient * 1.5;
-                watercolor = lerp(watercolor * 0.3 * sunFade, watercolor, saturate(1.0 - exp(-sunFade * _SunTransmittance)));
-
-                return watercolor;
             }
 
             // ============================================================
@@ -793,10 +772,12 @@ Shader "SphericalOcean/HDRP"
                 }
                 #endif
 
-                // Foam: blend FFT Jacobian foam (from cascades) with analytic Gerstner foam
+                // Foam: sample texture for organic noise breakup, modulated by analytic Jacobian
                 #if defined(ENABLE_FOAM)
                 {
-                    half foam = saturate(i.foamValue * _FoamIntensity * 3.0);
+                    float2 foamUV = i.worldPos.xz * _FoamScale * 0.01 + _CrestTime * _FoamScrollSpeed * float2(cos(_WindDirection), sin(_WindDirection));
+                    half noiseFoam = SAMPLE_TEXTURE2D(_FoamTexture, sampler_FoamTexture, foamUV).r;
+                    half foam = saturate(i.foamValue * _FoamIntensity * 3.0) * noiseFoam;
                     foam = pow(foam, 0.5);
                     col = lerp(col, _FoamWhiteColor.rgb, foam * _FoamWhiteColor.a);
                 }

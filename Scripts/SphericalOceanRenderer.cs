@@ -151,6 +151,9 @@ public class SphericalOceanRenderer : MonoBehaviour
     // Foam generator
     private OceanFoamGenerator _foamGenerator;
 
+    // Cached weights array to avoid GC allocation every frame
+    private readonly float[] _cascadeWeights = new float[MAX_CASCADES];
+
     static SphericalOceanRenderer()
     {
         for (int i = 0; i < MAX_CASCADES; i++)
@@ -275,8 +278,11 @@ public class SphericalOceanRenderer : MonoBehaviour
             ? Vector3.Distance(cam.transform.position, GetPlanetCenter())
             : 1000f;
 
-        float[] weights = new float[MAX_CASCADES];
         float totalWeight = 0f;
+
+        // Reset cached weights
+        for (int i = 0; i < MAX_CASCADES; i++)
+            _cascadeWeights[i] = 0f;
 
         int count = Mathf.Min(_cascadeSims.Count, MAX_CASCADES);
         for (int i = 0; i < count; i++)
@@ -296,36 +302,36 @@ public class SphericalOceanRenderer : MonoBehaviour
             {
                 var config = cascadeData.cascades[i];
                 float t = Mathf.InverseLerp(config.distanceRange.x, config.distanceRange.y, camDist);
-                weights[i] = Mathf.Lerp(config.blendIn, config.blendOut, t);
+                _cascadeWeights[i] = Mathf.Lerp(config.blendIn, config.blendOut, t);
 
                 // Smooth edge fade
                 float edgeFade = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(config.distanceRange.x, config.distanceRange.x + 20f, camDist))
                                * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(config.distanceRange.y, config.distanceRange.y - 20f, camDist));
-                weights[i] *= edgeFade;
+                _cascadeWeights[i] *= edgeFade;
             }
             else
             {
-                weights[i] = 1f;
+                _cascadeWeights[i] = 1f;
             }
 
-            totalWeight += weights[i];
+            totalWeight += _cascadeWeights[i];
         }
 
         // Normalize weights
         if (totalWeight > 0.001f)
         {
             for (int i = 0; i < MAX_CASCADES; i++)
-                weights[i] /= totalWeight;
+                _cascadeWeights[i] /= totalWeight;
         }
         else if (count > 0)
         {
             // Fallback: if all weights are zero (e.g., camera outside all cascade ranges),
             // use the first active cascade at full weight
-            weights[0] = 1f;
+            _cascadeWeights[0] = 1f;
         }
 
         Shader.SetGlobalInt(ID_CascadeCount, count);
-        Shader.SetGlobalVector(ID_CascadeWeights, new Vector4(weights[0], weights[1], weights[2], weights[3]));
+        Shader.SetGlobalVector(ID_CascadeWeights, new Vector4(_cascadeWeights[0], _cascadeWeights[1], _cascadeWeights[2], _cascadeWeights[3]));
     }
 
 
@@ -349,23 +355,23 @@ public class SphericalOceanRenderer : MonoBehaviour
     {
         // Use Gerstner waves only for gameplay queries (buoyancy, underwater check).
         // FFT is GPU-only — too heavy for CPU per-query evaluation.
-        float height = seaLevelRadius;
+        float waveHeight = 0f;
         float time = Application.isPlaying ? Time.time : (float)GetEditorTime();
         float2 windDir = new float2(Mathf.Cos(windDirection), Mathf.Sin(windDirection));
         Vector3 center = GetPlanetCenter();
         Vector3 dir = (worldPos - center).normalized;
         float2 pos2D = dir.xz * worldScale;
 
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < octaveCount; i++)
         {
             float freq = (i + 1) * waveScale * 0.1f;
             float amp = maxWaveAmplitude * Mathf.Exp(-i * 0.5f) * waveScale;
             float2 k = windDir * freq;
             float phase = math.dot(k, pos2D) - time * waveSpeed * freq;
-            height += amp * Mathf.Sin(phase);
+            waveHeight += amp * Mathf.Sin(phase);
         }
 
-        return height * waveChoppiness;
+        return seaLevelRadius + (waveHeight * waveChoppiness);
     }
 
     public bool IsUnderwater(Vector3 worldPos)
@@ -508,6 +514,7 @@ public class SphericalOceanRenderer : MonoBehaviour
         _material.SetFloat("_WaveSpeed", waveSpeed);
         _material.SetFloat("_MaxWaveAmplitude", maxWaveAmplitude);
         _material.SetFloat("_WorldScale", worldScale);
+        _material.SetInt("_OctaveCount", octaveCount);
 
         _material.SetFloat("_NormalsStrengthOverall", normalsStrengthOverall);
         _material.SetFloat("_NormalsStrength", normalStrength);
@@ -518,7 +525,6 @@ public class SphericalOceanRenderer : MonoBehaviour
         _material.SetColor("_DiffuseShadow", scatterShadow);
         _material.SetFloat("_ScatterAmount", scatterAmount);
         _material.SetColor("_ScatterColor", scatterColor);
-        _material.SetFloat("_ScatterFade", scatterFade);
 
         _material.SetColor("_SubSurfaceColour", sssColor);
         _material.SetFloat("_SubSurfaceBase", sssBase);
@@ -543,6 +549,7 @@ public class SphericalOceanRenderer : MonoBehaviour
         _material.SetFloat("_WaveFoamFeather", foamFeather);
         _material.SetFloat("_ShorelineFoamMinDepth", shorelineFoamMinDepth);
         _material.SetFloat("_FoamIntensity", foamIntensity);
+        _material.SetFloat("_FoamScrollSpeed", 0.3f);
 
         _material.SetVector("_DepthFogDensity", depthFogDensity);
         _material.SetFloat("_RefractionStrength", refractionStrength);
@@ -553,12 +560,6 @@ public class SphericalOceanRenderer : MonoBehaviour
         _material.SetFloat("_CausticsStrength", causticsStrength);
         _material.SetFloat("_CausticsFocalDepth", causticsFocalDepth);
         _material.SetFloat("_CausticsDepthOfField", causticsDepthOfField);
-
-        _material.SetFloat("_Visibility", visibility);
-        _material.SetVector("_WaterExtinction", waterExtinction);
-        _material.SetVector("_SunTransmittance", sunTransmittance);
-        _material.SetColor("_WaterColor", waterColor);
-        _material.SetFloat("_HorizonFog", horizonFog);
 
         _material.SetFloat("_SkyIntensity", skyIntensity);
 
