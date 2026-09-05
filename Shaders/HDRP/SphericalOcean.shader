@@ -127,9 +127,6 @@ Shader "SphericalOcean/HDRP"
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/LightLoop/ShaderVariablesLightLoop.hlsl"
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/LightLoop/LightLoopDef.hlsl"
 
-            // --- Triplanar mapping ---
-            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
-
             // --- Texture declarations ---
             TEXTURE2D(_Normals);               SAMPLER(sampler_Normals);
             TEXTURE2D(_FoamTexture);           SAMPLER(sampler_FoamTexture);
@@ -597,6 +594,7 @@ Shader "SphericalOcean/HDRP"
                 // Normal mapping with triplanar
                 float3 mappedNormal = n_pixel;
                 half3 lightScatterContrib = 0;
+                float sunFade = saturate(1.0 - exp(-mainLight.direction.y));
 
                 #if defined(ENABLE_NORMALS)
                 {
@@ -608,7 +606,6 @@ Shader "SphericalOcean/HDRP"
                     // Light scatter
                     float3 lR = reflect(-lightDir, lightNormal);
                     float s = max(dot(lR, view) * 2.0 - 1.2, 0);
-                    float sunFade = saturate(1.0 - exp(-_WorldSpaceLightPos0.y));
                     float lightScatter = saturate(
                         (saturate(dot(-lightDir, lightNormal) * 0.7 + 0.3) * s) * _ScatterAmount
                     ) * sunFade;
@@ -624,7 +621,6 @@ Shader "SphericalOcean/HDRP"
                 half3 col = scatterCol + lightScatterContrib;
 
                 // Reflection via HDRP SampleSkyTexture
-                float sunFade = saturate(1.0 - exp(-_WorldSpaceLightPos0.y));
                 {
                     half3 refl = reflect(-view, mappedNormal);
                     refl.y = max(refl.y, 0.0);
@@ -638,12 +634,12 @@ Shader "SphericalOcean/HDRP"
                     float NdotH = saturate(dot(mappedNormal, halfVec));
                     float NdotV = saturate(dot(mappedNormal, view));
                     float NdotL = saturate(dot(mappedNormal, -lightDir));
-                    float alpha = _SpecularMinRoughness * _SpecularMinRoughness;
-                    float alpha2 = alpha * alpha;
-                    float denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
-                    float D = alpha2 / (3.14159265 * denom * denom);
-                    float vis = 0.25 / max(NdotL * NdotV, 0.001);
-                    float sunSpec = D * vis * _DirectionalLightBoost * NdotL;
+                    float roughness = max(_SpecularMinRoughness, 0.04);
+                    float a2 = roughness * roughness;
+                    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                    float D = a2 / (3.14159265 * d * d);
+                    float Vis = 1.0 / (NdotH * NdotH * (1.0 - a2) + a2);
+                    float sunSpec = D * Vis * _DirectionalLightBoost * saturate(NdotL);
                     sunSpec = min(sunSpec, 50.0);
                     skyColor.rgb += sunSpec * lightCol * shadow * sunFade;
                     #endif
