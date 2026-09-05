@@ -103,6 +103,10 @@ public class SphericalOceanRenderer : MonoBehaviour
     public Color waterColor = new Color(0.0078f, 0.5176f, 0.7f, 1f);
     [Range(0f, 100f)] public float horizonFog = 50f;
 
+    [Header("Sky")]
+    public Cubemap skyCubemap;
+    [Range(0f, 5f)] public float skyIntensity = 1f;
+
     [Header("Shadows")]
     public bool enableShadows = true;
 
@@ -295,6 +299,7 @@ public class SphericalOceanRenderer : MonoBehaviour
             if (normalMap != null) _material.SetTexture("_Normals", normalMap);
             if (foamTexture != null) _material.SetTexture("_FoamTexture", foamTexture);
             if (causticsTexture != null) _material.SetTexture("_CausticsTexture", causticsTexture);
+            if (skyCubemap != null) _material.SetTexture("_SkyCubemap", skyCubemap);
 
             _mr.shadowCastingMode = ShadowCastingMode.Off;
         }
@@ -365,6 +370,8 @@ public class SphericalOceanRenderer : MonoBehaviour
         _material.SetVector("_SunTransmittance", sunTransmittance);
         _material.SetColor("_WaterColor", waterColor);
         _material.SetFloat("_HorizonFog", horizonFog);
+
+        _material.SetFloat("_SkyIntensity", skyIntensity);
 
         // Keywords
         SetKeyword("ENABLE_FOAM", enableFoam);

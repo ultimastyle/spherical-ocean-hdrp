@@ -86,6 +86,10 @@ Shader "SphericalOcean/HDRP"
 
         [Header(Horizon)]
         _HorizonFog("Horizon Fog", Range(0.0, 100.0)) = 50.0
+
+        [Header(Sky)]
+        [NoScaleOffset] _SkyCubemap("Sky Cubemap", Cube) = "" {}
+        _SkyIntensity("Sky Intensity", Float) = 1.0
     }
 
     SubShader
@@ -133,6 +137,7 @@ Shader "SphericalOcean/HDRP"
             TEXTURE2D(_CausticsTexture);       SAMPLER(sampler_CausticsTexture);
             TEXTURE2D_X(_CameraDepthTexture);  SAMPLER(sampler_CameraDepthTexture);
             TEXTURE2D_X(_CameraColorTexture);  SAMPLER(sampler_CameraColorTexture);
+            TEXTURECUBE(_SkyCubemap);          SAMPLER(sampler_SkyCubemap);
 
             // --- Per-frame uniforms (set via MaterialPropertyBlock, NOT in CBUFFER) ---
             float3 _OceanCenterPosWorld;
@@ -189,6 +194,7 @@ Shader "SphericalOcean/HDRP"
                 float3 _WaterColor;
                 float _HorizonFog;
                 float _UseExactFresnel;
+                float _SkyIntensity;
             CBUFFER_END
 
             static const float PI = 3.14159265;
@@ -625,8 +631,8 @@ Shader "SphericalOcean/HDRP"
                     half3 refl = reflect(-view, mappedNormal);
                     refl.y = max(refl.y, 0.0);
 
-                    // Use HDRP sky sampling
-                    float4 skyColor = SampleSkyTexture(refl, 0, 0);
+                    // Sky reflection via cubemap (assign HDRP baking cubemap or procedural sky cubemap)
+                    float4 skyColor = SAMPLE_TEXTURECUBE(_SkyCubemap, sampler_SkyCubemap, refl) * _SkyIntensity;
 
                     #if defined(ENABLE_SHADOWS)
                     // GGX specular — energy-conserving microfacet model
