@@ -303,6 +303,12 @@ public class SphericalOceanRenderer : MonoBehaviour
             for (int i = 0; i < MAX_CASCADES; i++)
                 weights[i] /= totalWeight;
         }
+        else if (count > 0)
+        {
+            // Fallback: if all weights are zero (e.g., camera outside all cascade ranges),
+            // use the first active cascade at full weight
+            weights[0] = 1f;
+        }
 
         Shader.SetGlobalInt(ID_CascadeCount, count);
         Shader.SetGlobalVector(ID_CascadeWeights, new Vector4(weights[0], weights[1], weights[2], weights[3]));

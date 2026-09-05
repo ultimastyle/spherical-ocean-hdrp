@@ -39,14 +39,14 @@ Shader "SphericalOcean/Underwater"
             HLSLPROGRAM
             #pragma vertex Vert
             #pragma fragment Frag
-            #pragma target 5.0
+            #pragma target 4.5
 
             #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariables.hlsl"
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/ShaderLibrary/ShaderVariablesFunctions.hlsl"
 
-            // --- Properties ---
-            CBUFFER_START(UnderwaterCB)
+            // SRP Batcher requires UnityPerMaterial
+            CBUFFER_START(UnityPerMaterial)
                 float4 _WaterColor;
                 float4 _AbsorptionColor;
                 float4 _ScatteringColor;
@@ -68,11 +68,10 @@ Shader "SphericalOcean/Underwater"
             TEXTURE2D_X(_CameraDepthTexture);
             SAMPLER(sampler_CameraDepthTexture);
 
-            // --- Vertex ---
+            // Fullscreen triangle vertex shader (no vertex buffer needed)
             struct Attributes
             {
-                float4 positionOS : POSITION;
-                float2 texcoord : TEXCOORD0;
+                uint vertexID : SV_VertexID;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -80,29 +79,22 @@ Shader "SphericalOcean/Underwater"
             {
                 float4 positionCS : SV_POSITION;
                 float2 texcoord : TEXCOORD0;
-                float3 viewRay : TEXCOORD1;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
 
             Varyings Vert(Attributes input)
             {
-                Varyings o;
+                Varyings output;
                 UNITY_SETUP_INSTANCE_ID(input);
-                UNITY_INITIALIZE_OUTPUT(Varyings, o);
-                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-                o.positionCS = TransformObjectToHClip(input.positionOS.xyz);
-                o.texcoord = input.texcoord;
+                // Procedural fullscreen triangle
+                output.positionCS = GetFullScreenTriangleVertexPosition(input.vertexID);
+                output.texcoord = GetFullScreenTriangleTexCoord(input.vertexID);
 
-                // Reconstruct view ray from screen position
-                float2 ndc = input.texcoord * 2.0 - 1.0;
-                float aspect = _ScreenSize.x / _ScreenSize.y;
-                o.viewRay = float3(ndc.x * aspect, ndc.y, 1.0);
-
-                return o;
+                return output;
             }
 
-            // --- Fragment ---
             float4 Frag(Varyings i) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
@@ -110,32 +102,36 @@ Shader "SphericalOcean/Underwater"
                 float2 uv = i.texcoord;
                 float4 source = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, uv);
 
-                // Reconstruct world position from depth
-                float rawDepth = SAMPLE_TEXTURE2D_X(_CameraDepthTexture, sampler_CameraDepthTexture, uv);
-                float sceneDepth = LinearEyeDepth(rawDepth, _ZBufferParams);
+                // Correct stereo depth sampling for HDRP
+                uint2 positionSS = uv * _ScreenSize.xy;
+                float rawDepth = LOAD_TEXTURE2D_X(_CameraDepthTexture, positionSS).r;
 
-                // View direction in world space
-                float3 viewDir = normalize(i.viewRay);
-                float3 worldPos = _WorldSpaceCameraPos + viewDir * sceneDepth;
+                // Early out for background/skybox (reversed-Z in HDRP)
+                #if UNITY_REVERSED_Z
+                if (rawDepth == 0.0) return source;
+                #else
+                if (rawDepth == 1.0) return source;
+                #endif
+
+                // Accurate world position reconstruction using inverse view-projection matrix
+                float3 worldPos = ComputeWorldSpacePosition(uv, rawDepth, _InvViewProjMatrix);
+                float sceneDepth = length(worldPos - _WorldSpaceCameraPos);
 
                 // --- Water Absorption ---
-                // Absorption increases exponentially with depth
                 float absorptionFactor = 1.0 - exp(-sceneDepth * _FogDensity);
                 float3 absorption = lerp(float3(1, 1, 1), _AbsorptionColor.rgb, absorptionFactor);
 
                 // --- Underwater Fog ---
-                // Fog increases with distance, with a wave crest variation
                 float fogFactor = saturate((sceneDepth - _FogStart) / max(_FogEnd - _FogStart, 0.001));
                 fogFactor = fogFactor * _FogDensity;
 
-                // Add wave crest fog (sinusoidal variation)
+                // Wave crest variation
                 float waveCrest = sin(_Time.y * 2.0 + worldPos.x * 0.5 + worldPos.z * 0.3) * 0.5 + 0.5;
                 fogFactor += waveCrest * _WaveCrestFog * fogFactor;
 
                 float3 fogColor = lerp(_WaterColor.rgb, _ScatteringColor.rgb, fogFactor);
 
                 // --- Caustics ---
-                // Project caustics from above (simulates light caustics on the sea floor)
                 float2 causticsUV = worldPos.xz * _CausticsScale;
                 float2 causticsOffset1 = float2(_Time.y * _CausticsSpeed * 0.1, _Time.y * _CausticsSpeed * 0.07);
                 float2 causticsOffset2 = float2(-_Time.y * _CausticsSpeed * 0.08, _Time.y * _CausticsSpeed * 0.12);
@@ -144,12 +140,10 @@ Shader "SphericalOcean/Underwater"
                 float caustics2 = SAMPLE_TEXTURE2D(_CausticsTexture, sampler_CausticsTexture, causticsUV * 1.3 + causticsOffset2).r;
                 float caustics = min(caustics1, caustics2) * _CausticsStrength;
 
-                // Fade caustics with depth
                 float causticsFade = saturate(1.0 - sceneDepth / _DepthFade);
                 caustics *= causticsFade;
 
                 // --- Wave Distortion ---
-                // Slight screen-space distortion from waves
                 float2 distortion = float2(
                     sin(_Time.y * 3.0 + uv.y * 10.0) * _WaveIntensity,
                     cos(_Time.y * 2.5 + uv.x * 8.0) * _WaveIntensity
@@ -162,7 +156,6 @@ Shader "SphericalOcean/Underwater"
                 color = lerp(color, fogColor, saturate(fogFactor));
                 color += caustics * _WaterColor.rgb;
 
-                // Depth-based color shift to deeper blue at distance
                 float depthShift = saturate(sceneDepth / _DepthFade);
                 color = lerp(color, _WaterColor.rgb * 0.5, depthShift * 0.3);
 

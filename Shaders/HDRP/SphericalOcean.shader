@@ -153,7 +153,7 @@ Shader "SphericalOcean/HDRP"
             float _CrestTime;
 
             // --- Material properties ---
-            CBUFFER_START(SphericalOceanMaterial)
+            CBUFFER_START(UnityPerMaterial)
                 float _WindSpeed;
                 float _WindDirection;
                 float _WaveChoppiness;
