@@ -27,7 +27,7 @@ public class SphericalOceanRenderer : MonoBehaviour
     [Header("Mesh")]
     [Range(0, 6)] public int icosphereSubdivisions = 4;
     [Range(1, 8)] public int octaveCount = 5;
-    public float maxWaveAmplitude = 50f;
+    public float maxWaveAmplitude = 10f;
     public float minWaveAmplitude = 0.1f;
 
     [Header("Wave Spectrum")]
@@ -65,7 +65,7 @@ public class SphericalOceanRenderer : MonoBehaviour
     public bool enableSSS = true;
     [ColorUsage(false, true)] public Color sssColor = new Color(0.0f, 0.55f, 0.5f, 1f);
     [Range(0f, 4f)] public float sssBase = 0.3f;
-    [Range(0f, 10f)] public float sssIntensity = 2.5f;
+    [Range(0f, 10f)] public float sssIntensity = 1.2f;
     [Range(1f, 16f)] public float sssFalloff = 4f;
     [Range(0.01f, 50f)] public float shallowDepthMax = 15f;
     [Range(0.01f, 10f)] public float shallowDepthPower = 2f;
@@ -90,7 +90,7 @@ public class SphericalOceanRenderer : MonoBehaviour
     [ColorUsage(false, true)] public Color scatterBase = new Color(0.0f, 0.01f, 0.12f, 1f);
     [ColorUsage(false, true)] public Color scatterGrazing = new Color(0.0f, 0.008f, 0.1f, 1f);
     [ColorUsage(false, true)] public Color scatterShadow = new Color(0.0f, 0.003f, 0.06f, 1f);
-    [Range(0f, 10f)] public float scatterAmount = 4f;
+    [Range(0f, 10f)] public float scatterAmount = 2f;
     public Color scatterColor = new Color(0.0f, 0.9f, 0.7f, 1f);
     [Range(0f, 1f)] public float scatterFade = 0.6f;
 
@@ -103,14 +103,14 @@ public class SphericalOceanRenderer : MonoBehaviour
     public bool useExactFresnel = true;
 
     [Header("Directional Light")]
-    [Range(0f, 512f)] public float directionalLightBoost = 128f;
+    [Range(0f, 512f)] public float directionalLightBoost = 2f;
     [Range(1f, 4096f)] public float directionalLightFallOff = 300f;
 
     [Header("Transparency")]
     public bool enableTransparency = true;
     public Vector4 depthFogDensity = new Vector4(0.7f, 0.25f, 0.3f, 1f);
     [Range(0f, 2f)] public float refractionStrength = 0.8f;
-    [Range(0f, 0.02f)] public float aberrationAmount = 0.0015f;
+    [Range(0f, 0.02f)] public float aberrationAmount = 0.0005f;
 
     [Header("Water Volume")]
     public float visibility = 40f;
