@@ -137,11 +137,9 @@ Shader "SphericalOcean/HDRP"
             TEXTURE2D_X(_CameraDepthTexture);  SAMPLER(sampler_CameraDepthTexture);
             TEXTURE2D_X(_CameraColorTexture);  SAMPLER(sampler_CameraColorTexture);
 
-            // --- Global constants set by C# ---
-            CBUFFER_START(SphericalOceanGlobals)
-                float3 _OceanCenterPosWorld;
-                float _CrestTime;
-            CBUFFER_END
+            // --- Per-frame uniforms (set via MaterialPropertyBlock, NOT in CBUFFER) ---
+            float3 _OceanCenterPosWorld;
+            float _CrestTime;
 
             // --- Material properties ---
             CBUFFER_START(SphericalOceanMaterial)
@@ -205,9 +203,12 @@ Shader "SphericalOcean/HDRP"
 
             void ComputeTangentFrame(float3 normal, out float3 tangent, out float3 bitangent)
             {
-                // Pick an arbitrary axis not parallel to normal
-                float3 anyVec = abs(normal.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
-                tangent = normalize(cross(anyVec, normal));
+                // Continuous tangent frame — no hard branch at poles
+                // Fritsch-Style: pick axis based on which component is smallest
+                float3 a = abs(normal);
+                float3 up = a.x <= a.y ? float3(1, 0, 0) : float3(0, 1, 0);
+                if (a.z > max(a.x, a.y)) up = float3(0, 1, 0);
+                tangent = normalize(cross(up, normal));
                 bitangent = cross(normal, tangent);
             }
 
@@ -229,16 +230,19 @@ Shader "SphericalOcean/HDRP"
                 light.color = float3(1, 1, 1);
                 light.dimmer = 1.0;
 
-                if (_DirectionalLightCount == 0) return light;
+                // Guard: only access if buffer is bound (safe fallback if not)
+                if (_DirectionalLightCount > 0)
+                {
+                    uint idx = (_DirectionalShadowIndex >= 0)
+                        ? (uint)_DirectionalShadowIndex
+                        : 0u;
+                    idx = min(idx, (uint)_DirectionalLightCount - 1u);
 
-                uint idx = (_DirectionalShadowIndex >= 0)
-                    ? (uint)_DirectionalShadowIndex
-                    : 0u;
-
-                DirectionalLightData dirLight = _DirectionalLightDatas[idx];
-                light.direction = dirLight.forward;
-                light.color = dirLight.color;
-                light.dimmer = dirLight.lightDimmer;
+                    DirectionalLightData dirLight = _DirectionalLightDatas[idx];
+                    light.direction = dirLight.forward;
+                    light.color = dirLight.color * dirLight.lightDimmer;
+                    light.dimmer = dirLight.lightDimmer;
+                }
                 return light;
             }
 
@@ -381,7 +385,7 @@ Shader "SphericalOcean/HDRP"
             float3 SampleTriplanarNormal(float3 worldPos, float3 normal, float2 scale, float time)
             {
                 float3 absNormal = abs(normal);
-                float3 blendWeights = pow(absNormal, 3.0);
+                float3 blendWeights = pow(absNormal, 1.5);
                 blendWeights /= dot(blendWeights, 1.0);
 
                 float2 uvXZ = worldPos.xz * scale;
@@ -408,27 +412,22 @@ Shader "SphericalOcean/HDRP"
                 NormalData nd;
                 float2 s = float2(scale, scale) * 0.001;
 
-                // Sample at different scales for cascaded detail
+                // Sample at different scales for cascaded detail (4 scales = 12 texture lookups)
                 float3 n0 = SampleTriplanarNormal(worldPos, vertexNormal, s * 0.04, time);
                 float3 n1 = SampleTriplanarNormal(worldPos, vertexNormal, s * 0.1, time);
-                float3 n2 = SampleTriplanarNormal(worldPos, vertexNormal, s * 0.25, time);
-                float3 n3 = SampleTriplanarNormal(worldPos, vertexNormal, s * 0.5, time);
-                float3 n4 = SampleTriplanarNormal(worldPos, vertexNormal, s * 1.0, time);
-                float3 n5 = SampleTriplanarNormal(worldPos, vertexNormal, s * 2.0, time);
+                float3 n2 = SampleTriplanarNormal(worldPos, vertexNormal, s * 0.5, time);
+                float3 n3 = SampleTriplanarNormal(worldPos, vertexNormal, s * 1.5, time);
 
-                float2 bigWaves = float2(0.3, 0.3);
-                float2 midWaves = float2(0.3, 0.15);
-                float2 smallWaves = float2(0.15, 0.1);
+                float2 bigWaves = float2(0.35, 0.35);
+                float2 smallWaves = float2(0.15, 0.15);
 
                 nd.normal = normalize(
                     n0 * bigWaves.x + n1 * bigWaves.y +
-                    n2 * midWaves.x + n3 * midWaves.y +
-                    n4 * smallWaves.x + n5 * smallWaves.y);
+                    n2 * smallWaves.x + n3 * smallWaves.y);
 
                 nd.lightNormal = normalize(
                     n0 * bigWaves.x * 0.5 + n1 * bigWaves.y * 0.5 +
-                    n2 * midWaves.x * 0.1 + n3 * midWaves.y * 0.1 +
-                    n4 * smallWaves.x * 0.1 + n5 * smallWaves.y * 0.1);
+                    n2 * smallWaves.x * 0.1 + n3 * smallWaves.y * 0.1);
 
                 return nd;
             }
@@ -634,11 +633,19 @@ Shader "SphericalOcean/HDRP"
                     float4 skyColor = SampleSkyTexture(refl, 0, 0);
 
                     #if defined(ENABLE_SHADOWS)
-                    // Sun specular
-                    float luminosity = dot(float3(0.30, 0.59, 0.11), skyColor.rgb * 2.0);
-                    float reflectivity = pow(luminosity, 3.0);
-                    float sunSpec = min(pow(atan(max(dot(refl, -lightDir), 0.0) * 1.55), 1000.0) * reflectivity * _DirectionalLightBoost, 50.0);
-                    skyColor.rgb += sunSpec * lightDir * shadow * sunFade;
+                    // GGX specular — energy-conserving microfacet model
+                    float3 halfVec = normalize(-lightDir + view);
+                    float NdotH = saturate(dot(mappedNormal, halfVec));
+                    float NdotV = saturate(dot(mappedNormal, view));
+                    float NdotL = saturate(dot(mappedNormal, -lightDir));
+                    float alpha = _SpecularMinRoughness * _SpecularMinRoughness;
+                    float alpha2 = alpha * alpha;
+                    float denom = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
+                    float D = alpha2 / (3.14159265 * denom * denom);
+                    float vis = 0.25 / max(NdotL * NdotV, 0.001);
+                    float sunSpec = D * vis * _DirectionalLightBoost * NdotL;
+                    sunSpec = min(sunSpec, 50.0);
+                    skyColor.rgb += sunSpec * lightCol * shadow * sunFade;
                     #endif
 
                     float fresnel = CalculateFresnel(view, mappedNormal);

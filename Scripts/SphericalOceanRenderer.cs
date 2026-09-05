@@ -1,8 +1,4 @@
-using System;
 using System.Collections.Generic;
-using Unity.Collections;
-using Unity.Jobs;
-using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.HighDefinition;
@@ -26,7 +22,7 @@ public class SphericalOceanRenderer : MonoBehaviour
     public float seaLevelRadius = 417f;
 
     [Header("Mesh")]
-    [Range(0, 6)] public int icosphereSubdivisions = 3;
+    [Range(0, 6)] public int icosphereSubdivisions = 4;
     [Range(1, 8)] public int octaveCount = 5;
     public float maxWaveAmplitude = 50f;
     public float minWaveAmplitude = 0.1f;
@@ -107,22 +103,10 @@ public class SphericalOceanRenderer : MonoBehaviour
     public Color waterColor = new Color(0.0078f, 0.5176f, 0.7f, 1f);
     [Range(0f, 100f)] public float horizonFog = 50f;
 
-    [Header("Dynamic Waves")]
-    public bool enableDynamicWaves = true;
-    [Range(0.8f, 1f)] public float fluxDamping = 0.96f;
-    [Range(1, 4)] public int subSteps = 2;
-
     [Header("Shadows")]
     public bool enableShadows = true;
 
     public static SphericalOceanRenderer Instance { get; private set; }
-
-    private NativeArray<float> _depth;
-    private NativeArray<float4> _flux;
-    private NativeArray<float2> _vel;
-    private NativeArray<float4> _packed;
-    private NativeArray<byte> _src;
-    private bool _alloc;
 
     private Material _material;
     private MaterialPropertyBlock _propBlock;
@@ -149,17 +133,14 @@ public class SphericalOceanRenderer : MonoBehaviour
 
     private void Start()
     {
-        Allocate();
         BuildIcosphere();
         EnsureMaterial();
-        InitFluid();
         _ready = true;
     }
 
     private void OnDestroy()
     {
         if (Instance == this) Instance = null;
-        DisposeArrays();
     }
 
     private void Update()
@@ -177,52 +158,6 @@ public class SphericalOceanRenderer : MonoBehaviour
         _lastTime = time;
     }
 
-    private void FixedUpdate()
-    {
-        if (!_ready || !Application.isPlaying) return;
-
-        float baseDt = Time.fixedDeltaTime / Mathf.Max(1, subSteps);
-        float dt = Mathf.Min(baseDt, 0.45f);
-        float cellSize = 2f * PI * oceanRadius / Mathf.Sqrt(_depth.Length);
-
-        for (int s = 0; s < subSteps; s++)
-        {
-            var flux = new FluxJob
-            {
-                n = (int)Mathf.Sqrt(_depth.Length),
-                dt = dt,
-                cellSize = cellSize,
-                g = G,
-                damping = fluxDamping,
-                seaR = seaLevelRadius,
-                depth = _depth,
-                flux = _flux
-            }.Schedule(_depth.Length, 256);
-
-            var scale = new ScaleJob
-            {
-                dt = dt,
-                cellSize = cellSize,
-                depth = _depth,
-                flux = _flux
-            }.Schedule(_depth.Length, 256, flux);
-
-            var apply = new ApplyJob
-            {
-                n = (int)Mathf.Sqrt(_depth.Length),
-                dt = dt,
-                cellSize = cellSize,
-                seaR = seaLevelRadius,
-                ground = _depth,
-                flux = _flux,
-                src = _src,
-                depth = _depth,
-                vel = _vel
-            }.Schedule(_depth.Length, 256, scale);
-
-            apply.Complete();
-        }
-    }
 
 #if UNITY_EDITOR
     private void OnValidate()
@@ -340,46 +275,6 @@ public class SphericalOceanRenderer : MonoBehaviour
         return idx;
     }
 
-    // --- Fluid simulation ---
-
-    private void Allocate()
-    {
-        int n = Mathf.Max(32, (int)Mathf.Pow(2, icosphereSubdivisions + 4));
-        int nc = n * n;
-
-        if (_alloc && _depth.Length != nc) DisposeArrays();
-        if (!_alloc)
-        {
-            _depth = new NativeArray<float>(nc, Allocator.Persistent);
-            _flux = new NativeArray<float4>(nc, Allocator.Persistent);
-            _vel = new NativeArray<float2>(nc, Allocator.Persistent);
-            _src = new NativeArray<byte>(nc, Allocator.Persistent);
-            _packed = new NativeArray<float4>(nc, Allocator.Persistent);
-            _alloc = true;
-        }
-    }
-
-    private void DisposeArrays()
-    {
-        if (!_alloc) return;
-        _depth.Dispose();
-        _flux.Dispose();
-        _vel.Dispose();
-        _src.Dispose();
-        _packed.Dispose();
-        _alloc = false;
-    }
-
-    private void InitFluid()
-    {
-        for (int i = 0; i < _depth.Length; i++)
-        {
-            _flux[i] = float4.zero;
-            _vel[i] = float2.zero;
-            _depth[i] = Mathf.Max(0f, seaLevelRadius);
-        }
-    }
-
     private void EnsureMaterial()
     {
         _material = _mr.sharedMaterial;
@@ -492,95 +387,4 @@ public class SphericalOceanRenderer : MonoBehaviour
 #else
     private double GetEditorTime() => 0.0;
 #endif
-
-    // --- Burst Jobs ---
-
-    [Unity.Burst.BurstCompile]
-    private struct FluxJob : IJobParallelFor
-    {
-        public int n;
-        public float dt, cellSize, g, damping, seaR;
-        [ReadOnly] public NativeArray<float> depth;
-        public NativeArray<float4> flux;
-
-        public void Execute(int i)
-        {
-            int x = i % n, y = i / n;
-            float hi = depth[i];
-            float4 f = flux[i] * damping;
-
-            f.x = Step(f.x, hi, x - 1, y, x > 0);
-            f.y = Step(f.y, hi, x + 1, y, x < n - 1);
-            f.z = Step(f.z, hi, x, y - 1, y > 0);
-            f.w = Step(f.w, hi, x, y + 1, y < n - 1);
-
-            flux[i] = math.max(0f, f);
-        }
-
-        private float Step(float prev, float hi, int nx, int ny, bool inside)
-        {
-            float hj = inside ? depth[ny * n + nx] : seaR;
-            float dh = hi - hj;
-            return prev + dt * cellSize * g * dh / cellSize;
-        }
-    }
-
-    [Unity.Burst.BurstCompile]
-    private struct ScaleJob : IJobParallelFor
-    {
-        public float dt, cellSize;
-        [ReadOnly] public NativeArray<float> depth;
-        public NativeArray<float4> flux;
-
-        public void Execute(int i)
-        {
-            float4 f = flux[i];
-            float outSum = f.x + f.y + f.z + f.w;
-            if (outSum <= 1e-7f) return;
-            float avail = depth[i] * cellSize * cellSize;
-            float want = outSum * dt;
-            if (want > avail) flux[i] = f * (avail / want);
-        }
-    }
-
-    [Unity.Burst.BurstCompile]
-    private struct ApplyJob : IJobParallelFor
-    {
-        public int n;
-        public float dt, cellSize, seaR;
-        [ReadOnly] public NativeArray<float> ground;
-        [ReadOnly] public NativeArray<float4> flux;
-        [ReadOnly] public NativeArray<byte> src;
-        public NativeArray<float> depth;
-        public NativeArray<float2> vel;
-
-        public void Execute(int i)
-        {
-            int x = i % n, y = i / n;
-
-            if (src[i] != 0)
-            {
-                depth[i] = math.max(0f, seaR - ground[i]);
-                vel[i] = float2.zero;
-                return;
-            }
-
-            float fOut = flux[i].x + flux[i].y + flux[i].z + flux[i].w;
-            float fIn = 0f;
-            if (x > 0) fIn += flux[i - 1].y;
-            if (x < n - 1) fIn += flux[i + 1].x;
-            if (y > 0) fIn += flux[i - n].w;
-            if (y < n - 1) fIn += flux[i + n].z;
-
-            float d = depth[i] + dt * (fIn - fOut) / (cellSize * cellSize);
-            depth[i] = math.max(0f, d);
-
-            float uNet = 0.5f * ((flux[i].y - flux[i].x)
-                + ((x > 0 ? flux[i - 1].y : 0f) - (x < n - 1 ? flux[i + 1].x : 0f)));
-            float vNet = 0.5f * ((flux[i].w - flux[i].z)
-                + ((y > 0 ? flux[i - n].w : 0f) - (y < n - 1 ? flux[i + n].z : 0f)));
-            float dd = math.max(0.05f, depth[i]);
-            vel[i] = new float2(uNet, vNet) / (dd * cellSize);
-        }
-    }
 }
