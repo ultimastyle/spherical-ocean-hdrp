@@ -54,22 +54,22 @@ public class SphericalOceanRenderer : MonoBehaviour
 
     [Header("Foam")]
     public bool enableFoam = true;
-    [Range(0f, 2f)] public float foamIntensity = 1f;
-    [Range(0.01f, 50f)] public float foamScale = 10f;
+    [Range(0f, 2f)] public float foamIntensity = 1.5f;
+    [Range(0.01f, 50f)] public float foamScale = 12f;
     public Texture2D foamTexture;
-    [Range(0.001f, 1f)] public float foamFeather = 0.4f;
-    [Range(0.01f, 5f)] public float shorelineFoamMinDepth = 0.27f;
+    [Range(0.001f, 1f)] public float foamFeather = 0.35f;
+    [Range(0.01f, 5f)] public float shorelineFoamMinDepth = 0.2f;
     public Color foamWhiteColor = Color.white;
 
     [Header("Subsurface Scattering")]
     public bool enableSSS = true;
-    [ColorUsage(false, true)] public Color sssColor = new Color(0.088f, 0.497f, 0.456f, 1f);
-    [Range(0f, 4f)] public float sssBase = 0f;
-    [Range(0f, 10f)] public float sssIntensity = 1.7f;
-    [Range(1f, 16f)] public float sssFalloff = 5f;
-    [Range(0.01f, 50f)] public float shallowDepthMax = 10f;
-    [Range(0.01f, 10f)] public float shallowDepthPower = 2.5f;
-    [ColorUsage(false, true)] public Color shallowColor = new Color(0f, 0.0039f, 0.247f, 1f);
+    [ColorUsage(false, true)] public Color sssColor = new Color(0.0f, 0.55f, 0.5f, 1f);
+    [Range(0f, 4f)] public float sssBase = 0.3f;
+    [Range(0f, 10f)] public float sssIntensity = 2.5f;
+    [Range(1f, 16f)] public float sssFalloff = 4f;
+    [Range(0.01f, 50f)] public float shallowDepthMax = 15f;
+    [Range(0.01f, 10f)] public float shallowDepthPower = 2f;
+    [ColorUsage(false, true)] public Color shallowColor = new Color(0.0f, 0.7f, 0.65f, 1f);
 
     [Header("Caustics")]
     public bool enableCaustics = true;
@@ -82,42 +82,42 @@ public class SphericalOceanRenderer : MonoBehaviour
 
     [Header("Normals")]
     public Texture2D normalMap;
-    [Range(0.01f, 200f)] public float normalScale = 40f;
-    [Range(0.01f, 2f)] public float normalStrength = 0.36f;
-    [Range(0f, 1f)] public float normalsStrengthOverall = 1f;
+    [Range(0.01f, 200f)] public float normalScale = 80f;
+    [Range(0.01f, 2f)] public float normalStrength = 0.4f;
+    [Range(0f, 1f)] public float normalsStrengthOverall = 0.85f;
 
     [Header("Scattering")]
-    [ColorUsage(false, true)] public Color scatterBase = new Color(0f, 0.0027f, 0.17f, 1f);
-    [ColorUsage(false, true)] public Color scatterGrazing = new Color(0f, 0.0039f, 0.169f, 1f);
-    [ColorUsage(false, true)] public Color scatterShadow = new Color(0f, 0.0013f, 0.085f, 1f);
-    [Range(0f, 10f)] public float scatterAmount = 3.5f;
-    public Color scatterColor = new Color(0f, 1f, 0.95f, 1f);
-    [Range(0f, 1f)] public float scatterFade = 0.5f;
+    [ColorUsage(false, true)] public Color scatterBase = new Color(0.0f, 0.01f, 0.12f, 1f);
+    [ColorUsage(false, true)] public Color scatterGrazing = new Color(0.0f, 0.008f, 0.1f, 1f);
+    [ColorUsage(false, true)] public Color scatterShadow = new Color(0.0f, 0.003f, 0.06f, 1f);
+    [Range(0f, 10f)] public float scatterAmount = 4f;
+    public Color scatterColor = new Color(0.0f, 0.9f, 0.7f, 1f);
+    [Range(0f, 1f)] public float scatterFade = 0.6f;
 
     [Header("Reflections")]
-    [Range(0f, 2f)] public float specular = 0.7f;
-    [Range(0f, 1f)] public float specularMinRoughness = 0.02f;
+    [Range(0f, 2f)] public float specular = 0.8f;
+    [Range(0f, 1f)] public float specularMinRoughness = 0.015f;
     [Range(1f, 20f)] public float fresnelPower = 5f;
     [Range(1f, 2f)] public float refractiveIndexAir = 1f;
     [Range(1f, 2f)] public float refractiveIndexWater = 1.333f;
     public bool useExactFresnel = true;
 
     [Header("Directional Light")]
-    [Range(0f, 512f)] public float directionalLightBoost = 7f;
-    [Range(1f, 4096f)] public float directionalLightFallOff = 275f;
+    [Range(0f, 512f)] public float directionalLightBoost = 128f;
+    [Range(1f, 4096f)] public float directionalLightFallOff = 300f;
 
     [Header("Transparency")]
     public bool enableTransparency = true;
-    public Vector4 depthFogDensity = new Vector4(0.9f, 0.3f, 0.35f, 1f);
-    [Range(0f, 2f)] public float refractionStrength = 0.5f;
-    [Range(0f, 0.02f)] public float aberrationAmount = 0.002f;
+    public Vector4 depthFogDensity = new Vector4(0.7f, 0.25f, 0.3f, 1f);
+    [Range(0f, 2f)] public float refractionStrength = 0.8f;
+    [Range(0f, 0.02f)] public float aberrationAmount = 0.0015f;
 
     [Header("Water Volume")]
-    public float visibility = 28f;
-    public Vector3 waterExtinction = new Vector3(0.6f, 0.8f, 1f);
-    public Vector3 sunTransmittance = new Vector3(0.45f, 0.55f, 0.68f);
-    public Color waterColor = new Color(0.0078f, 0.5176f, 0.7f, 1f);
-    [Range(0f, 100f)] public float horizonFog = 50f;
+    public float visibility = 40f;
+    public Vector3 waterExtinction = new Vector3(0.5f, 0.7f, 0.9f);
+    public Vector3 sunTransmittance = new Vector3(0.5f, 0.6f, 0.75f);
+    public Color waterColor = new Color(0.01f, 0.45f, 0.65f, 1f);
+    [Range(0f, 100f)] public float horizonFog = 60f;
 
     [Header("Sky")]
     public Cubemap skyCubemap;

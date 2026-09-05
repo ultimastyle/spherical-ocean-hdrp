@@ -52,48 +52,72 @@ public class WaveCascadeData : ScriptableObject
     public CascadeConfig[] cascades = DefaultCascades();
 
     /// <summary>
-    /// Default 3-cascade setup: far swells + mid wind waves + near detail.
+    /// Default 3-cascade setup for tropical island water:
+    ///   Far: gentle ocean swells
+    ///   Mid: moderate wind waves
+    ///   Near: fine ripples and surface detail
     /// </summary>
     public static CascadeConfig[] DefaultCascades()
     {
         return new CascadeConfig[]
         {
-            // Far: large swells
+            // Far: gentle ocean swells — broad, calm motion
             new CascadeConfig
             {
-                name = "Far Swells",
+                name = "Ocean Swells",
                 resolution = 128,
-                patchSize = 500f,
-                windSpeed = 15f,
-                spectrumScale = 0.015f,
-                choppiness = 0.8f,
-                distanceRange = new Vector2(200f, 2000f),
+                patchSize = 600f,
+                windSpeed = 8f,
+                windDirection = new Vector2(1f, 0.3f),
+                windAlignment = 0.8f,
+                spectrumType = OceanWaveSpectrum.SpectrumType.PiersonMoskowitz,
+                spectrumScale = 0.012f,
+                choppiness = 0.6f,
+                gravity = 9.81f,
+                foamThreshold = -0.2f,
+                foamDecay = 0.1f,
+                foamGain = 0.7f,
+                distanceRange = new Vector2(300f, 2500f),
                 blendIn = 0f,
-                blendOut = 0.3f
+                blendOut = 0.35f
             },
-            // Mid: wind waves
+            // Mid: wind waves — visible chop, tropical feel
             new CascadeConfig
             {
                 name = "Wind Waves",
                 resolution = 256,
-                patchSize = 200f,
-                windSpeed = 12f,
+                patchSize = 250f,
+                windSpeed = 10f,
+                windDirection = new Vector2(0.8f, 0.5f),
+                windAlignment = 1.0f,
+                spectrumType = OceanWaveSpectrum.SpectrumType.JONSWAP,
                 spectrumScale = 0.01f,
-                choppiness = 1.5f,
-                distanceRange = new Vector2(50f, 500f),
+                choppiness = 1.2f,
+                gravity = 9.81f,
+                foamThreshold = -0.1f,
+                foamDecay = 0.15f,
+                foamGain = 0.9f,
+                distanceRange = new Vector2(80f, 600f),
                 blendIn = 0.3f,
                 blendOut = 0.7f
             },
-            // Near: detail + ripples
+            // Near: fine detail — ripples, wave crests near shore
             new CascadeConfig
             {
                 name = "Detail Ripples",
                 resolution = 256,
-                patchSize = 80f,
-                windSpeed = 8f,
+                patchSize = 100f,
+                windSpeed = 6f,
+                windDirection = new Vector2(0.6f, 0.8f),
+                windAlignment = 1.2f,
+                spectrumType = OceanWaveSpectrum.SpectrumType.JONSWAP,
                 spectrumScale = 0.008f,
-                choppiness = 2f,
-                distanceRange = new Vector2(0f, 150f),
+                choppiness = 1.8f,
+                gravity = 9.81f,
+                foamThreshold = -0.05f,
+                foamDecay = 0.2f,
+                foamGain = 1.0f,
+                distanceRange = new Vector2(0f, 180f),
                 blendIn = 0.7f,
                 blendOut = 1f
             }
